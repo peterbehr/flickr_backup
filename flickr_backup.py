@@ -1,21 +1,5 @@
 #!/usr/bin/env python
 
-#
-# FlickrTouchr - a simple python script to grab all your photos from flickr, 
-#                dump into a directory - organised into folders by set - 
-#                along with any favourites you have saved.
-#
-#                You can then sync the photos to an iPod touch.
-#
-# Version:       1.2
-#
-# Original Author:	colm - AT - allcosts.net  - Colm MacCarthaigh - 2008-01-21
-#
-# Modified by:			Dan Benjamin - http://hivelogic.com										
-#
-# License:       		Apache 2.0 - http://www.apache.org/licenses/LICENSE-2.0.html
-#
-
 import xml.dom.minidom
 import webbrowser
 import urlparse
@@ -26,8 +10,12 @@ import md5
 import sys
 import os
 
-API_KEY       = "e224418b91b4af4e8cdb0564716fa9bd"
-SHARED_SECRET = "7cddb9c9716501a0"
+import flickr_keys
+
+API_KEY = flickr_keys.API_KEY
+SHARED_SECRET = flickr_keys.SHARED_SECRET
+
+
 
 #
 # Utility functions for dealing with flickr authentication
@@ -83,10 +71,7 @@ def froblogin(frob, perms):
     url   += "&frob=" + frob + "&api_sig=" + hash
 
     # Tell the user what's happening
-    print "In order to allow FlickrTouchr to read your photos and favourites"
-    print "you need to allow the application. Please press return when you've"
-    print "granted access at the following url (which should have opened"
-    print "automatically)."
+    print "To authenticate with Flickr, you'll be directed here:"
     print
     print url
     print 
@@ -125,7 +110,7 @@ def froblogin(frob, perms):
         # Return the token and userid
         return (nsid, token)
     except:
-        raise "Login failed"
+        raise "Login failed. =["
 
 # 
 # Sign an arbitrary flickr request with a token
@@ -177,7 +162,6 @@ def getphoto(id, token, filename):
         else:
           print "Failed to get original for photo id " + id
 
-
         # Free the DOM memory
         dom.unlink()
 
@@ -193,122 +177,97 @@ def getphoto(id, token, filename):
         return filename
     except:
         print "Failed to retrieve photo id " + id
-    
+
+def flickr_frob_cache():
+    # First things first, see if we have a cached user and auth-token
+    try:
+        cache = open('flickr_frob_cache.txt', 'r')
+        config = cPickle.load(cache)
+        cache.close()
+        result = 'Read cache from previously existing file.'
+    # We don't - get a new one
+    except:
+        (user, token) = froblogin(getfrob(), 'read')
+        config = { 'version':1 , 'user':user, 'token':token }
+        # Save it for future use
+        cache = open('flickr_frob_cache.txt', 'w')
+        cPickle.dump(config, cache)
+        cache.close()
+        result = 'Created new frob cache.'
+    print result
+    return config
+
+def flickr_api_call(config, domain, method, extras):
+    url = 'http://api.flickr.com/services/rest/?method=flickr.'
+    url += domain
+    url += '.'
+    url += method
+    url += '&user_id='
+    url += config['user']
+    url += extras
+    url = flickrsign(url, config['token'])
+    response = urllib2.urlopen(url)
+    dom = xml.dom.minidom.parse(response)
+    return dom
+
+def get_photo_comments(id, token):
+    return
+
+def get_photo_sets(id, token):
+    return
+
+def get_photo_views(id, token):
+    return
+
+def get_photo_faves(id, token):
+    return
+
+def get_photo_info(id, token):
+    return
+
+def get_user_data():
+    return
+
+def get_photo_tags(id, token):
+    return
+
 ######## Main Application ##########
 if __name__ == '__main__':
-
     # The first, and only argument needs to be a directory
     try:
         os.chdir(sys.argv[1])
     except:
-        print "usage: %s directory" % sys.argv[0] 
+        print 'Usage: %s [directory]' % sys.argv[0]
         sys.exit(1)
-
-    # First things first, see if we have a cached user and auth-token
-    try:
-        cache = open("touchr.frob.cache", "r")
-        config = cPickle.load(cache)
-        cache.close()
-
-    # We don't - get a new one
-    except:
-        (user, token) = froblogin(getfrob(), "read")
-        config = { "version":1 , "user":user, "token":token }  
-
-        # Save it for future use
-        cache = open("touchr.frob.cache", "w")
-        cPickle.dump(config, cache)
-        cache.close()
-
-    # Now, construct a query for the list of photo sets
-    url  = "http://api.flickr.com/services/rest/?method=flickr.photosets.getList"
-    url += "&user_id=" + config["user"]
-    url  = flickrsign(url, config["token"])
-
-    # get the result
-    response = urllib2.urlopen(url)
     
-    # Parse the XML
-    dom = xml.dom.minidom.parse(response)
-
-    # Get the list of Sets
-    sets =  dom.getElementsByTagName("photoset")
-
-    # For each set - create a url
-    urls = []
-    for set in sets:
-        pid = set.getAttribute("id")
-        dir = getText(set.getElementsByTagName("title")[0].childNodes)
-        dir = unicodedata.normalize('NFKD', dir.decode("utf-8", "ignore")).encode('ASCII', 'ignore') # Normalize to ASCII
-
-        # Build the list of photos
-        url   = "http://api.flickr.com/services/rest/?method=flickr.photosets.getPhotos"
-        url  += "&photoset_id=" + pid
-
-        # Append to our list of urls
-        urls.append( (url , dir) )
+    config = flickr_frob_cache()
     
-    # Free the DOM memory
-    dom.unlink()
-
-    # Add the photos which are not in any set
-    url   = "http://api.flickr.com/services/rest/?method=flickr.photos.getNotInSet"
-    urls.append( (url, "No Set") )
-
-    # Add the user's Favourites
-    url   = "http://api.flickr.com/services/rest/?method=flickr.favorites.getList"
-    urls.append( (url, "Favourites") )
-
-    # Time to get the photos
-    inodes = {}
-    for (url , dir) in urls:
-        # Create the directory
-        try:
-            os.makedirs(dir)
-        except:
+    # get user info
+    user = flickr_api_call(config, 'people', 'getInfo', '')
+    # print response.toxml()
+    
+    photos = []
+    # get user photo list
+    stream_pages = stream_page = 1
+    stream_pages_counted = False
+    while stream_page <= stream_pages:
+        dom = flickr_api_call(config, 'people', 'getPhotos', '&per_page=500')
+        photos.append(dom)
+        if not stream_pages_counted:
+        # print photos[0].toxml()
+            stream_pages = int(dom.getElementsByTagName('photo')[0].parentNode.getAttribute('pages'))
+            stream_pages_counted = True
+        # do stuff for each photo
+        for photo in dom.getElementsByTagName('photo'):
+            # we need to append things
+            # number of views (stats)
+            # number of faves
+            # number of comments
+            print photo.getAttribute('id')
             pass
-
-        # Get 500 results per page
-        url += "&per_page=500"
-        pages = page = 1
-
-        while page <= pages: 
-            request = url + "&page=" + str(page)
-
-            # Sign the url
-            request = flickrsign(request, config["token"])
-
-            # Make the request
-            response = urllib2.urlopen(request)
-
-            # Parse the XML
-            dom = xml.dom.minidom.parse(response)
-
-            # Get the total
-            pages = int(dom.getElementsByTagName("photo")[0].parentNode.getAttribute("pages"))
-
-            # Grab the photos
-            for photo in dom.getElementsByTagName("photo"):
-                # Tell the user we're grabbing the file
-                print photo.getAttribute("title").encode("utf8") + " ... in set ... " + dir
-
-                # Grab the id
-                photoid = photo.getAttribute("id")
-
-                # The target
-                target = dir + "/" + photoid + ".jpg"
-
-                # Skip files that exist
-                if os.access(target, os.R_OK):
-                    inodes[photoid] = target
-                    continue
-                
-                # Look it up in our dictionary of inodes first
-                if photoid in inodes and inodes[photoid] and os.access(inodes[photoid], os.R_OK):
-                    # woo, we have it already, use a hard-link
-                    os.link(inodes[photoid], target)
-                else:
-                    inodes[photoid] = getphoto(photo.getAttribute("id"), config["token"], target)
-
-            # Move on the next page
-            page = page + 1
+        stream_page += 1
+    
+    # # this file will contain all photo nodes, overwritten if exists
+    # photos = open('index.xml', 'w')
+    
+    # photos.close()

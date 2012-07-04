@@ -14,6 +14,8 @@ import flickr_keys
 
 API_KEY = flickr_keys.API_KEY
 SHARED_SECRET = flickr_keys.SHARED_SECRET
+CONFIG = {}
+HTML = ''
 
 
 
@@ -115,7 +117,8 @@ def froblogin(frob, perms):
 # 
 # Sign an arbitrary flickr request with a token
 # 
-def flickrsign(url, token):
+def flickrsign(url):
+    token = CONFIG['token']
     query  = urlparse.urlparse(url).query
     query += "&api_key=" + API_KEY + "&auth_token=" + token
     params = query.split('&') 
@@ -138,21 +141,21 @@ def flickrsign(url, token):
 #
 # Grab the photo from the server
 #
-def getphoto(id, token, filename):
+def getphoto(id, filename):
     try:
         # Contruct a request to find the sizes
         url  = "http://api.flickr.com/services/rest/?method=flickr.photos.getSizes"
         url += "&photo_id=" + id
     
         # Sign the request
-        url = flickrsign(url, token)
+        url = flickrsign(url)
     
         # Make the request
         response = urllib2.urlopen(url)
         
         # Parse the XML
         dom = xml.dom.minidom.parse(response)
-
+        
         # Get the list of sizes
         sizes =  dom.getElementsByTagName("size")
 
@@ -160,7 +163,8 @@ def getphoto(id, token, filename):
         if (sizes[-1].getAttribute("label") == "Original"):
           imgurl = sizes[-1].getAttribute("source")
         else:
-          print "Failed to get original for photo id " + id
+            imgurl = sizes[-1].getAttribute("source")
+            print "Failed to get original for photo " + id
 
         # Free the DOM memory
         dom.unlink()
@@ -173,63 +177,101 @@ def getphoto(id, token, filename):
         fh = open(filename, "w")
         fh.write(data)
         fh.close()
-
+        return "Saved photo " + filename
         return filename
     except:
-        print "Failed to retrieve photo id " + id
+        print "Failed to retrieve photo " + id
 
 def flickr_frob_cache():
+    global CONFIG # not going to go back and make a settings hash
     # First things first, see if we have a cached user and auth-token
     try:
         cache = open('flickr_frob_cache.txt', 'r')
-        config = cPickle.load(cache)
+        CONFIG = cPickle.load(cache)
         cache.close()
         result = 'Read cache from previously existing file.'
     # We don't - get a new one
     except:
         (user, token) = froblogin(getfrob(), 'read')
-        config = { 'version':1 , 'user':user, 'token':token }
+        CONFIG = { 'version':1 , 'user':user, 'token':token }
         # Save it for future use
         cache = open('flickr_frob_cache.txt', 'w')
-        cPickle.dump(config, cache)
+        cPickle.dump(CONFIG, cache)
         cache.close()
         result = 'Created new frob cache.'
     print result
-    return config
+    return CONFIG
 
-def flickr_api_call(config, domain, method, extras):
+def flickr_api_call(domain, method, extras):
     url = 'http://api.flickr.com/services/rest/?method=flickr.'
     url += domain
     url += '.'
     url += method
     url += '&user_id='
-    url += config['user']
+    url += CONFIG['user']
     url += extras
-    url = flickrsign(url, config['token'])
+    url = flickrsign(url)
     response = urllib2.urlopen(url)
     dom = xml.dom.minidom.parse(response)
     return dom
 
-def get_photo_comments(id, token):
+def get_stream_page(page, stream):
+    extras = '&per_page=500' + '&page=' + str(page)
+    dom = flickr_api_call('people', 'getPhotos', extras)
+    stream.append(dom)
+    stream_pages = int(dom.getElementsByTagName('photo')[0].parentNode.getAttribute('pages'))
+    # do stuff for each photo
+    for photo in dom.getElementsByTagName('photo')[0:1]:
+        id = photo.getAttribute('id')
+        print 'Processing photo ' + id
+        info = get_photo_info(id)
+        contexts = get_photo_contexts(id)
+        comments = get_photo_comments(id)
+        # print comments.getElementsByTagName('comments')
+        faves = get_photo_faves(id)
+        # print faves.getElementsByTagName('person').toxml()
+        photo_file = id + '.jpg'
+        getphoto(id, photo_file)
+        data_file = id + '.txt'
+        metadata = '<?xml version="1.0" ?>'
+        
+        comments.unlink()
+        faves.unlink()
+        info.unlink()
+        contexts.unlink()
+    dom.unlink()
     return
 
-def get_photo_sets(id, token):
-    return
+def get_photo_comments(id):
+    extras = '&photo_id=' + id
+    response = flickr_api_call('photos', 'comments.getList', extras)
+    # form <comments><comment></comment></comments>
+    # validate that the request succeeded
+    # there should be a log
+    return response
 
-def get_photo_views(id, token):
-    return
+def get_photo_contexts(id):
+    extras = '&photo_id=' + id
+    response = flickr_api_call('photos', 'getAllContexts', extras)
+    return response
 
-def get_photo_faves(id, token):
-    return
+def get_photo_faves(id):
+    extras = '&photo_id=' + id + '&per_page=50'
+    response = flickr_api_call('photos', 'getFavorites', extras)
+    # <photo><person></person></photo>
+    return response
 
-def get_photo_info(id, token):
-    return
+def get_photo_info(id):
+    extras = '&photo_id=' + id
+    response = flickr_api_call('photos', 'getInfo', extras)
+    return response
 
 def get_user_data():
-    return
-
-def get_photo_tags(id, token):
-    return
+    user = flickr_api_call('people', 'getInfo', '')
+    return user
+    
+# http://www.flickr.com/services/api/flickr.photosets.comments.getList.html
+# http://www.flickr.com/services/api/flickr.photosets.getInfo.html
 
 ######## Main Application ##########
 if __name__ == '__main__':
@@ -242,29 +284,12 @@ if __name__ == '__main__':
     
     config = flickr_frob_cache()
     
-    # get user info
-    user = flickr_api_call(config, 'people', 'getInfo', '')
-    # print response.toxml()
-    
-    photos = []
+    stream = []
     # get user photo list
     stream_pages = stream_page = 1
     stream_pages_counted = False
     while stream_page <= stream_pages:
-        dom = flickr_api_call(config, 'people', 'getPhotos', '&per_page=500')
-        photos.append(dom)
-        if not stream_pages_counted:
-        # print photos[0].toxml()
-            stream_pages = int(dom.getElementsByTagName('photo')[0].parentNode.getAttribute('pages'))
-            stream_pages_counted = True
-        # do stuff for each photo
-        for photo in dom.getElementsByTagName('photo'):
-            # we need to append things
-            # number of views (stats)
-            # number of faves
-            # number of comments
-            print photo.getAttribute('id')
-            pass
+        get_stream_page(stream_page, stream)
         stream_page += 1
     
     # # this file will contain all photo nodes, overwritten if exists
